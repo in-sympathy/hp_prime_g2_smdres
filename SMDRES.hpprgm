@@ -1,0 +1,302 @@
+// ============================================================
+// SMDRES - SMD Resistor Code Decoder (HP Prime G2)
+//
+// Converts SMD resistor markings to Ohm values. Supports:
+//   3-digit codes      (103   -> 10 kOhm)
+//   4/5-digit codes    (4702  -> 47 kOhm)
+//   R/K/M decimal-point notation (4R7, R47, 4K7, 1M0, 10R0)
+//   EIA-96 codes: 2-digit index + multiplier letter, optional
+//     trailing tolerance letter (01A -> 1.00 Ohm, 68C -> 499 Ohm)
+//   Zero-ohm links (0, 000, 0000)
+//
+// Run SMDRES() from Home, enter one code, get the Ohm value.
+// Run it again for the next code.
+// ============================================================
+
+// ---- is character chIn one of "0".."9" ? ----
+isDigit(chIn)
+BEGIN
+  RETURN INSTRING("0123456789",chIn)>0;
+END;
+
+// ---- are all characters of str1 digits? (false for empty string) ----
+allDigits(str1)
+BEGIN
+  LOCAL idxc,lenc;
+  lenc:=SIZE(str1);
+  IF lenc==0 THEN RETURN 0; END;
+  FOR idxc FROM 1 TO lenc DO
+    IF NOT isDigit(MID(str1,idxc,1)) THEN RETURN 0; END;
+  END;
+  RETURN 1;
+END;
+
+// ---- are all characters of str1 the digit "0" ? ----
+allZero(str1)
+BEGIN
+  LOCAL idxc,lenc;
+  lenc:=SIZE(str1);
+  IF lenc==0 THEN RETURN 0; END;
+  FOR idxc FROM 1 TO lenc DO
+    IF MID(str1,idxc,1)<>"0" THEN RETURN 0; END;
+  END;
+  RETURN 1;
+END;
+
+// ---- strip trailing zeros (and a trailing ".") from a numeric string ----
+trimZeros(str1)
+BEGIN
+  LOCAL trimmed;
+  trimmed:=str1;
+  IF INSTRING(trimmed,".")>0 THEN
+    WHILE RIGHT(trimmed,1)=="0" DO
+      trimmed:=LEFT(trimmed,SIZE(trimmed)-1);
+    END;
+    IF RIGHT(trimmed,1)=="." THEN
+      trimmed:=LEFT(trimmed,SIZE(trimmed)-1);
+    END;
+  END;
+  RETURN trimmed;
+END;
+
+// ---- format an Ohm value with a sensible unit ----
+fmtOhms(vin)
+BEGIN
+  LOCAL unitStr,divisor,outStr;
+  IF vin>=1e9 THEN
+    unitStr:=" GOhm"; divisor:=1e9;
+  ELSE
+    IF vin>=1e6 THEN
+      unitStr:=" MOhm"; divisor:=1e6;
+    ELSE
+      IF vin>=1e3 THEN
+        unitStr:=" kOhm"; divisor:=1e3;
+      ELSE
+        unitStr:=" Ohm"; divisor:=1;
+      END;
+    END;
+  END;
+  outStr:=trimZeros(STRING(ROUND(vin/divisor,5)));
+  RETURN outStr+unitStr;
+END;
+
+// ---- EIA-96 mantissa table: index 1..96 -> 3 significant digits ----
+eia96tab(eIdx)
+BEGIN
+  LOCAL tbl;
+  tbl:={100,102,105,107,110,113,115,118,121,124,
+      127,130,133,137,140,143,147,150,154,158,
+      162,165,169,174,178,182,187,191,196,200,
+      205,210,215,221,226,232,237,243,249,255,
+      261,267,274,280,287,294,301,309,316,324,
+      332,340,348,357,365,374,383,392,402,412,
+      422,432,442,453,464,475,487,499,511,523,
+      536,549,562,576,590,604,619,634,649,665,
+      681,698,715,732,750,768,787,806,825,845,
+      866,887,909,931,953,976};
+  IF eIdx<1 OR eIdx>96 THEN RETURN -1; END;
+  RETURN tbl(eIdx);
+END;
+
+// ---- EIA-96 multiplier letter -> factor, -1 if unknown ----
+eia96mult(chc)
+BEGIN
+  IF chc=="Z" THEN RETURN 0.001; END;
+  IF chc=="Y" THEN RETURN 0.01; END;
+  IF chc=="X" OR chc=="S" THEN RETURN 0.1; END;
+  IF chc=="A" THEN RETURN 1; END;
+  IF chc=="B" OR chc=="H" THEN RETURN 10; END;
+  IF chc=="C" THEN RETURN 100; END;
+  IF chc=="D" THEN RETURN 1000; END;
+  IF chc=="E" THEN RETURN 10000; END;
+  IF chc=="F" THEN RETURN 100000; END;
+  RETURN -1;
+END;
+
+// ---- decode one SMD code. Returns "OK|<value>|<format>" on success,
+// or "ERR|<message>" on failure - SMDRES() below splits this apart. ----
+decodeSMD(rawIn)
+BEGIN
+  LOCAL code,cleaned,lenc,idxc,chc;
+  LOCAL foundPos,multVal,lft,rgt;
+  LOCAL ohmVal,sigFigs,powVal,eIdx,mantVal;
+
+  code:=UPPER(rawIn);
+  cleaned:="";
+  lenc:=SIZE(code);
+  FOR idxc FROM 1 TO lenc DO
+    chc:=MID(code,idxc,1);
+    IF chc<>" " THEN cleaned:=cleaned+chc; END;
+  END;
+  code:=cleaned;
+  lenc:=SIZE(code);
+
+  IF lenc==0 THEN
+    RETURN "ERR|Enter a code.";
+  END;
+
+  // 1) all zeros -> zero-ohm link
+  IF allZero(code) THEN
+    RETURN "OK|0 Ohm|zero-ohm link";
+  END;
+
+  // 2) R / K / M decimal-point notation, letter can be anywhere
+  foundPos:=0;
+  FOR idxc FROM 1 TO lenc DO
+    chc:=MID(code,idxc,1);
+    IF chc=="R" OR chc=="K" OR chc=="M" THEN foundPos:=idxc; END;
+  END;
+  IF foundPos>0 THEN
+    chc:=MID(code,foundPos,1);
+    IF chc=="R" THEN multVal:=1; END;
+    IF chc=="K" THEN multVal:=1000; END;
+    IF chc=="M" THEN multVal:=1000000; END;
+    IF foundPos==1 THEN
+      lft:="0";
+    ELSE
+      lft:=LEFT(code,foundPos-1);
+    END;
+    rgt:=MID(code,foundPos+1,lenc-foundPos);
+    IF lft=="" THEN lft:="0"; END;
+    IF rgt=="" THEN rgt:="0"; END;
+    IF allDigits(lft) AND allDigits(rgt) THEN
+      ohmVal:=EXPR(lft+"."+rgt)*multVal;
+      RETURN "OK|"+fmtOhms(ohmVal)+"|decimal notation";
+    ELSE
+      RETURN "ERR|Invalid code.";
+    END;
+  END;
+
+  // 3) pure numeric codes: 3, 4 or 5 digits (last digit = multiplier power)
+  IF allDigits(code) THEN
+    IF lenc==3 OR lenc==4 OR lenc==5 THEN
+      sigFigs:=EXPR(LEFT(code,lenc-1));
+      powVal:=EXPR(RIGHT(code,1));
+      ohmVal:=sigFigs*10^powVal;
+      RETURN "OK|"+fmtOhms(ohmVal)+"|"+STRING(lenc)+"-digit code";
+    ELSE
+      RETURN "ERR|Unsupported numeric length.";
+    END;
+  END;
+
+  // 4) EIA-96: 2 digits + multiplier letter (+ optional tolerance letter)
+  IF (lenc==3 OR lenc==4) AND isDigit(MID(code,1,1)) AND isDigit(MID(code,2,1)) THEN
+    eIdx:=EXPR(MID(code,1,2));
+    mantVal:=eia96tab(eIdx);
+    IF mantVal==-1 THEN
+      RETURN "ERR|Invalid EIA-96 index.";
+    END;
+    chc:=MID(code,3,1);
+    multVal:=eia96mult(chc);
+    IF multVal==-1 THEN
+      RETURN "ERR|Unrecognized multiplier letter.";
+    END;
+    ohmVal:=(mantVal/100)*multVal;
+    RETURN "OK|"+fmtOhms(ohmVal)+"|EIA-96 code";
+  END;
+
+  RETURN "ERR|Unrecognized code format.";
+END;
+
+// ---- entry point: a hand-drawn screen with a hand-built keystroke
+// reader, so the example text can sit as real static labels right next
+// to a live, editable code line (the native INPUT() dialog can't show
+// more than one line of help text, so this bypasses it entirely).
+// Digits are typed directly; ALPHA opens a picker for the letters
+// resistor codes use (R/K/M, and the EIA-96 multiplier letters) so
+// there's no need to guess at raw alpha-keyboard key codes.
+EXPORT SMDRES()
+BEGIN
+  LOCAL buf,kc,letterSet,letterIdx,loopOn;
+  LOCAL decoded,tagStr,p1,p2,restStr,ohmVal,kindStr,msgStr;
+
+  letterSet:="RKMABCDEFHSXYZ";
+
+  // Outer loop: converts one code, shows the result, then comes back
+  // for the next one. The only way out is ESC (which RETURNs directly).
+  WHILE 1==1 DO
+  buf:="103";
+  loopOn:=1;
+
+  WHILE loopOn==1 DO
+    RECT();
+    TEXTOUT_P("SMD Resistor Decoder",G0,5,5,2,RGB(0,0,0));
+    TEXTOUT_P("Ex 1: 103, 4702",G0,5,35,1,RGB(90,90,90));
+    TEXTOUT_P("Ex 2: 4R7 4K7 1M0 01A 68C",G0,5,50,1,RGB(90,90,90));
+    TEXTOUT_P("Code: "+buf+"_",G0,5,90,2,RGB(0,0,160));
+    TEXTOUT_P("0-9 = digit   ALPHA = letter",G0,5,180,1,RGB(0,0,0));
+    TEXTOUT_P("ENTER = decode   ESC = cancel",G0,5,195,1,RGB(0,0,0));
+
+    kc:=-1;
+    WHILE kc<0 DO
+      kc:=GETKEY;
+    END;
+
+    IF kc==4 THEN
+      // ESC - cancel
+      RETURN;
+    END;
+
+    IF kc==30 THEN
+      // ENTER - decode, but only if something was typed
+      IF SIZE(buf)>0 THEN
+        loopOn:=0;
+      END;
+    END;
+
+    IF kc==19 THEN
+      // Backspace - handled without LEFT(buf,0), in case that
+      // doesn't mean "empty string" on this firmware
+      IF SIZE(buf)==1 THEN
+        buf:="";
+      ELSE
+        IF SIZE(buf)>1 THEN
+          buf:=LEFT(buf,SIZE(buf)-1);
+        END;
+      END;
+    END;
+
+    IF kc==36 THEN
+      // ALPHA - pick a letter from a menu instead of typing it
+      letterIdx:=0;
+      CHOOSE(letterIdx,"Pick a letter","R","K","M","A","B","C","D","E","F","H","S","X","Y","Z");
+      IF letterIdx>0 THEN
+        buf:=buf+MID(letterSet,letterIdx,1);
+      END;
+    END;
+
+    IF kc==47 THEN buf:=buf+"0"; END;
+    IF kc==42 THEN buf:=buf+"1"; END;
+    IF kc==43 THEN buf:=buf+"2"; END;
+    IF kc==44 THEN buf:=buf+"3"; END;
+    IF kc==37 THEN buf:=buf+"4"; END;
+    IF kc==38 THEN buf:=buf+"5"; END;
+    IF kc==39 THEN buf:=buf+"6"; END;
+    IF kc==32 THEN buf:=buf+"7"; END;
+    IF kc==33 THEN buf:=buf+"8"; END;
+    IF kc==34 THEN buf:=buf+"9"; END;
+  END;
+
+  // ---- decode + split the "TAG|..." result. buf was built one
+  // character at a time, so it's already a clean literal string -
+  // no CAS-expression ambiguity to work around here. ----
+  decoded:=decodeSMD(buf);
+  p1:=INSTRING(decoded,"|");
+  tagStr:=LEFT(decoded,p1-1);
+
+  IF tagStr=="ERR" THEN
+    msgStr:=MID(decoded,p1+1,SIZE(decoded)-p1);
+    MSGBOX("Error: "+msgStr);
+  ELSE
+    restStr:=MID(decoded,p1+1,SIZE(decoded)-p1);
+    p2:=INSTRING(restStr,"|");
+    ohmVal:=LEFT(restStr,p2-1);
+    kindStr:=MID(restStr,p2+1,SIZE(restStr)-p2);
+
+    msgStr:=buf+" = "+ohmVal+CHAR(10)+
+         "Format: "+kindStr;
+
+    MSGBOX(msgStr);
+  END;
+  END; // end of outer WHILE 1==1 loop - back to a fresh Code: prompt
+END;
