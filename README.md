@@ -17,12 +17,10 @@ Multiplier letters for EIA-96: Z=×0.001, Y=×0.01, X/S=×0.1, A=×1, B/H=×10, 
 
 ## Installing on the calculator
 
-The Prime G2 has no SD card slot (that's a feature it dropped compared to
-older HP calculators like the 50g) — file transfer is either over USB or by
-typing the program in directly:
-
-1. **HP Connectivity Kit + USB cable (easiest)** — Connect the Prime G2, open the Connectivity Kit on your computer, and drag `SMDRES.hpprgm` onto the calculator in the file browser (it'll sit under Programs, next to Meshtastic).
-2. **Type it in by hand** — Open the Program Catalog (`Shift` + `1`), create a new program named `SMDRES`, and type in the contents of the file. It's plain ASCII, no special characters needed.
+Connect the Prime G2, open the Connectivity Kit on your computer, and drag
+`SMDRES.hpprgm` onto the calculator in the file browser — it'll sit under
+Programs, next to Meshtastic. Same method you've already been using for
+every version of this file.
 
 ## Running it
 
